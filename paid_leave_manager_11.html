@@ -488,6 +488,12 @@ tr:hover td { background: var(--surface2); }
     </div>
 
     <div class="card">
+      <div class="card-header"><span class="card-title">🗑 申請データのリセット</span></div>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:14px;">全メンバーの申請データ（承認済み・申請中・却下）をすべて削除し、取得済み日数・申請中日数を0にリセットします。</div>
+      <button class="btn danger" onclick="resetAllApps()">🗑 全申請データをリセット</button>
+    </div>
+
+    <div class="card">
       <div class="card-header"><span class="card-title">📧 メール通知設定</span></div>
       <div style="font-size:13px;color:var(--text2);margin-bottom:14px;">
         有給申請があったときに指定アドレスへメールで通知します。<a href="https://www.emailjs.com/" target="_blank" style="color:var(--blue);">EmailJS</a>（無料）を使用します。
@@ -614,7 +620,7 @@ tr:hover td { background: var(--surface2); }
 const COLORS = ['#a8dfc8','#b8d4f0','#f5c4b0','#c4dca0','#f0c0d0','#fac870','#cec8f5'];
 const TCOLORS = ['#1a5a3a','#1a4a7a','#6a2a14','#3a5a14','#5a1a38','#4a3000','#3a2870'];
 
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwNCeLrrAFMaPV3R6Ko0UJodI_9eNro7LQ8G5pbMCcyx-CIwJcDMFv9h7UKyHY-98xZ/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwuU7csWAvhTlQRTHnRQgGOGLB6VylCOzZ8h-oNW48JxamqNkQDRtpY50tYwaymW6gR/exec';
 
 // ローカルキャッシュ（高速表示用）
 function ls(k,d){try{const v=localStorage.getItem('plm2_'+k);return v?JSON.parse(v):d;}catch(e){return d;}}
@@ -645,6 +651,17 @@ let calY=new Date().getFullYear(), calM=new Date().getMonth()+1;
 document.getElementById('year-badge').textContent=calY+'年度';
 
 // スプレッドシートからデータを読み込む
+// ISO日付文字列を YYYY-MM-DD 形式に正規化する
+function normalizeDate(d){
+  if(!d)return '';
+  if(typeof d==='string'&&d.length===10)return d; // すでにYYYY-MM-DD
+  const dt=new Date(d);
+  if(isNaN(dt.getTime()))return d;
+  // UTC→JST補正してYYYY-MM-DDを返す
+  const jst=new Date(dt.getTime()+9*60*60*1000);
+  return jst.toISOString().slice(0,10);
+}
+
 function loadFromSheet(){
   showLoading(true);
   const localMembers=ls('members',[]);
@@ -675,8 +692,20 @@ function loadFromSheet(){
           return merged;
         });
       }
-      if(data.apps) apps=data.apps;
+      if(data.apps){
+        apps=data.apps;
+        // GASから読み込んだ日付をYYYY-MM-DD形式に正規化
+        apps.forEach(a=>{
+          a.start=normalizeDate(a.start);
+          a.end=normalizeDate(a.end)||a.start;
+        });
+      }
       if(data.apps) nid=Math.max(nid,...data.apps.map(a=>a.id||0))+1;
+      if(data.grantLog)  ss('grantLog', data.grantLog);
+      if(data.expireLog) ss('expireLog', data.expireLog);
+      if(data.config && data.config.emailConfig){
+        try{ ss('emailConfig', JSON.parse(data.config.emailConfig)); }catch(e){}
+      }
       ss('members',members);ss('apps',apps);ss('nid',nid);
       showLoading(false);
       buildUserSelect();buildHistoryFilter();updateBadge();renderDashboard();initApplyItems();
@@ -694,11 +723,14 @@ function loadFromSheet(){
 function saveAll(){
   // まずローカルに即保存
   ss('members',members);ss('apps',apps);ss('nid',nid);
-  // バックグラウンドでスプレッドシートに同期
+  // バックグラウンドでスプレッドシートに同期（全フィールド）
   const grantLog=ls('grantLog',[]);
+  const expireLog=ls('expireLog',[]);
+  const emailConfig=ls('emailConfig',null);
   fetch(GAS_URL,{
     method:'POST',
-    body:JSON.stringify({action:'saveAll',members,apps,grantLog})
+    body:JSON.stringify({action:'saveAll',members,apps,grantLog,expireLog,
+      config: emailConfig?{emailConfig:JSON.stringify(emailConfig)}:undefined})
   }).catch(()=>showToast('⚠ 保存に失敗しました。再度お試しください。'));
 }
 
@@ -789,10 +821,13 @@ function renderApprovals(){
   const pending=apps.filter(a=>a.status==='pending');
   const done=apps.filter(a=>a.status!=='pending').slice().reverse();
   document.getElementById('approval-pending').innerHTML=pending.length?pending.map(a=>{
-    const btns=mgr?`<div style="display:flex;gap:6px;">
+    const u=getCurrent();
+    const isOwn=u&&u.name===a.member;
+    const btns=isManager()?`<div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn success small" onclick="decide(${a.id},'approved')">✓ 承認</button>
           <button class="btn danger small" onclick="decide(${a.id},'rejected')">✗ 却下</button>
-        </div>`:'<span style="font-size:12px;color:var(--text3);">管理者のみ承認可</span>';
+          <button class="btn small" onclick="cancelApplication(${a.id})" style="color:var(--text2);">取り消し</button>
+        </div>`:isOwn?`<button class="btn small" onclick="cancelApplication(${a.id})" style="color:var(--red);border-color:var(--red);">取り消し</button>`:'<span style="font-size:12px;color:var(--text3);">管理者のみ承認可</span>';
     return`<div style="padding:12px 0;border-bottom:1px solid var(--border);">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;">
         <div>
@@ -811,9 +846,31 @@ function renderApprovals(){
     </div>`).join(''):'<div style="font-size:13px;color:var(--text3);padding:12px 0;">処理済みの申請はありません</div>';
 }
 
+function resetAllApps(){
+  if(!isManager()){showToast('管理者のみ操作できます');return;}
+  if(!confirm('全メンバーの申請データをすべて削除し、取得済み日数・申請中日数を0にリセットします。この操作は元に戻せません。よろしいですか？'))return;
+  apps=[];
+  members.forEach(m=>{m.used=0;m.pending=0;});
+  saveAll();updateBadge();renderDashboard();renderApprovals();renderHistory();
+  showToast('✓ 全申請データをリセットしました');
+}
+
+function cancelApplication(id){
+  const a=apps.find(x=>x.id===id);if(!a)return;
+  const u=getCurrent();
+  if(!isManager()&&u.name!==a.member){showToast('自分の申請のみ取り消せます');return;}
+  if(!confirm(`${a.start}〜${a.end||a.start}（${a.days}日）の申請を取り消しますか？`))return;
+  const m=members.find(x=>x.name===a.member);
+  if(m)m.pending=Math.max(0,m.pending-a.days);
+  apps=apps.filter(x=>x.id!==id);
+  saveAll();updateBadge();renderApprovals();renderDashboard();
+  showToast('✓ 申請を取り消しました');
+}
+
 function decide(id,status){
   if(!isManager()){showToast('管理者のみ操作できます');return;}
   const a=apps.find(x=>x.id===id);if(!a)return;
+  if(!a.end)a.end=a.start; // endが空の場合はstartで補完
   a.status=status;
   const m=members.find(x=>x.name===a.member);
   if(m){m.pending=Math.max(0,m.pending-a.days);if(status==='approved')m.used+=a.days;}
@@ -837,9 +894,7 @@ function updateManualPreview(){
   const end=document.getElementById('manual-end').value||start;
   const tv=parseFloat(document.getElementById('manual-type').value);
   if(!start){document.getElementById('manual-preview').style.display='none';return;}
-  const raw=Math.round((new Date(end)-new Date(start))/86400000)+1;
-  const days=parseFloat((raw*tv).toFixed(1));
-  const rem=m.total+(m.carryover||0)-m.used-m.pending-days;
+  const raw=Math.round((new Date(end+'T00:00:00')-new Date(start+'T00:00:00'))/86400000)+1;
   document.getElementById('manual-days-count').textContent=days+'日';
   document.getElementById('manual-remaining').textContent=rem+'日';
   document.getElementById('manual-preview').style.display='block';
@@ -858,7 +913,7 @@ function addManualHistory(){
   const tn=typeEl.options[typeEl.selectedIndex].text;
   if(!start){showToast('開始日を入力してください');return;}
   if(end<start){showToast('終了日は開始日以降にしてください');return;}
-  const raw=Math.round((new Date(end)-new Date(start))/86400000)+1;
+  const raw=Math.round((new Date(end+'T00:00:00')-new Date(start+'T00:00:00'))/86400000)+1;
   const days=parseFloat((raw*tv).toFixed(1));
   // 承認済みとして履歴に追加、取得済み日数を加算
   apps.push({id:nid++,member:m.name,start,end,days,tn,reason:reason||'手動入力',status:'approved'});
@@ -944,13 +999,18 @@ function renderCalendar(){
   const ld={};
   apps.forEach(a=>{
     if(a.status==='approved'||a.status==='pending'){
-      let d=new Date(a.start+'T00:00:00');
-      const end=new Date(a.end+'T00:00:00');
+      const startStr=a.start||'';
+      const endStr=a.end||a.start||'';
+      if(!startStr)return;
+      let d=new Date(startStr+'T00:00:00');
+      const end=new Date(endStr+'T00:00:00');
+      if(isNaN(d.getTime())||isNaN(end.getTime()))return;
       while(d<=end){
         if(d.getFullYear()===calY&&d.getMonth()===calM-1){
           const k=d.getDate();
           if(!ld[k])ld[k]=[];
-          ld[k].push({n:a.member.split(' ')[0],s:a.status});
+          const firstName=(a.member||'').split(/[\s　]/)[0];
+          ld[k].push({n:firstName,s:a.status});
         }
         d.setDate(d.getDate()+1);
       }
@@ -1314,9 +1374,9 @@ function updateItemType(id,val,name){
 
 function calcDays(item){
   if(!item.start)return 0;
-  const end=item.end||item.start; // 終了日省略時は開始日=終了日（1日）
+  const end=item.end||item.start;
   if(end<item.start)return 0;
-  const raw=Math.round((new Date(end)-new Date(item.start))/86400000)+1;
+  const raw=Math.round((new Date(end+'T00:00:00')-new Date(item.start+'T00:00:00'))/86400000)+1;
   return parseFloat((raw*parseFloat(item.type)).toFixed(1));
 }
 
@@ -1562,17 +1622,22 @@ function autoGrantLeave(){
     const grantAsOf=new Date(thisYear,thisMonth-1,1);
     const legal=calcLegalLeave(m.joinDate,parseInt(m.workDays||5),grantAsOf);
     if(legal.days<=0)return;
-    // 付与実行：totalを更新し、付与済みフラグをmember本体にも記録
+    // 付与実行：前年度残をcarryoverに移し、totalを今年度付与日数のみにリセット
     const prevTotal=m.total;
-    const newTotal=m.total+legal.days;
+    const prevCarryover=m.carryover||0;
+    const prevRemaining=Math.max(0, prevTotal+prevCarryover-m.used-m.pending);
     const join=new Date(m.joinDate+'T00:00:00');
     const months=(new Date().getFullYear()-join.getFullYear())*12+(new Date().getMonth()-join.getMonth());
-    m.total=months>=78?Math.min(40,newTotal):newTotal;
+    // 法定上限20日・繰越上限20日
+    const newCarryover=Math.min(20, prevRemaining);
+    const newTotal=months>=78?Math.min(20,legal.days):legal.days;
+    m.total=newTotal;
+    m.carryover=newCarryover;
     m.lastGrantYear=thisYear;
     m.lastGrantMonth=thisMonth;
     // 付与ログに記録
-    grantLog.push({memberId:m.id,name:m.name,year:thisYear,month:thisMonth,days:legal.days,prevTotal,newTotal:m.total,note:legal.note});
-    granted.push({name:m.name,days:legal.days});
+    grantLog.push({memberId:m.id,name:m.name,year:thisYear,month:thisMonth,days:newTotal,prevTotal,newTotal,newCarryover,note:legal.note});
+    granted.push({name:m.name,days:newTotal});
   });
 
   // ── 2年前の有給を失効させる ──────────────────────────────
