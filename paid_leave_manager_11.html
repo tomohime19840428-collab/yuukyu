@@ -731,7 +731,18 @@ function saveAll(){
     method:'POST',
     body:JSON.stringify({action:'saveAll',members,apps,grantLog,expireLog,
       config: emailConfig?{emailConfig:JSON.stringify(emailConfig)}:undefined})
-  }).catch(()=>showToast('⚠ 保存に失敗しました。再度お試しください。'));
+  })
+  .then(r=>r.json())
+  .then(data=>{
+    if(data.error||data.success!==true){
+      console.error('GAS保存エラー:',data);
+      showToast('⚠ サーバーへの保存に失敗しました: '+(data.error||'不明なエラー'));
+    }
+  })
+  .catch(err=>{
+    console.error('GAS通信エラー:',err);
+    showToast('⚠ サーバーへの保存に失敗しました。ネットワークを確認してください。');
+  });
 }
 
 function showLoading(show){
