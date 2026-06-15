@@ -729,6 +729,7 @@ function saveAll(){
   const emailConfig=ls('emailConfig',null);
   fetch(GAS_URL,{
     method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'},
     body:JSON.stringify({action:'saveAll',members,apps,grantLog,expireLog,
       config: emailConfig?{emailConfig:JSON.stringify(emailConfig)}:undefined})
   })
