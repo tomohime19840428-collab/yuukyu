@@ -727,18 +727,14 @@ function saveAll(){
   const grantLog=ls('grantLog',[]);
   const expireLog=ls('expireLog',[]);
   const emailConfig=ls('emailConfig',null);
+  // GAS Web AppはCORSプリフライトに対応していないため no-cors で送信
+  // （レスポンスは読めないが、リクエスト自体はGASに到達し処理される）
   fetch(GAS_URL,{
     method:'POST',
+    mode:'no-cors',
     headers:{'Content-Type':'text/plain;charset=utf-8'},
     body:JSON.stringify({action:'saveAll',members,apps,grantLog,expireLog,
       config: emailConfig?{emailConfig:JSON.stringify(emailConfig)}:undefined})
-  })
-  .then(r=>r.json())
-  .then(data=>{
-    if(data.error||data.success!==true){
-      console.error('GAS保存エラー:',data);
-      showToast('⚠ サーバーへの保存に失敗しました: '+(data.error||'不明なエラー'));
-    }
   })
   .catch(err=>{
     console.error('GAS通信エラー:',err);
